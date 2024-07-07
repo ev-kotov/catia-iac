@@ -1,0 +1,825 @@
+'=========================
+'Форматка по ГОСТ (чертеж)
+'=========================
+
+Public ActiveDoc     As Document
+Public Sheets
+Public Sheet
+Public Views
+Public View
+Public Texts         As DrawingTexts
+Public Text          As DrawingText
+Public Fact          As Factory2D
+Public Selection     As Selection
+
+
+Sub CATMain()
+  If Not CATInit(targetSheet) Then Exit Sub
+  On Error Resume Next
+    name = Texts.GetItem("Reference_" + GetMacroID()).Name
+  If Err.Number <> 0 Then
+    Err.Clear
+    name = "none"
+  End If
+  On Error Goto 0
+  If (name = "none") Then
+    CATDrw_Creation
+  Else   
+    CATDrw_Resizing
+    CATDrw_Update
+  End If
+  CATExit
+End Sub
+
+
+Sub CATDrw_Creation( targetSheet as CATIABase )
+  '-------------------------------------------------------------------------------
+  'How to create the FTB
+  '-------------------------------------------------------------------------------
+  If Not CATInit(targetSheet) Then Exit Sub  
+  If CATCheckRef(1) Then Exit Sub 'To check whether a FTB exists already in the sheet
+  CATCreateReference          'To place on the drawing a reference point
+  CATFrame      'To draw the frame  
+  CATCreateTitleBlockFrame    'To draw the geometry
+  CATTitleBlockText     'To fill in the title block
+  CATColorGeometry 'To change the geometry color 
+  CATExit targetSheet      'To save the sketch edition
+End Sub
+
+
+Sub CATDrw_Deletion( targetSheet as CATIABase )
+  '-------------------------------------------------------------------------------
+  'How to delete the FTB
+  '-------------------------------------------------------------------------------
+  If Not CATInit(targetSheet) Then Exit Sub  
+  If CATCheckRef(0) Then Exit Sub
+  DeleteAll "..Name=Frame_*"
+  DeleteAll "..Name=TitleBlock_*"
+'  DeleteAll "..Name=RevisionBlock_*"
+  DeleteAll "..Name=Reference_*"
+  CATExit targetSheet
+End Sub
+
+
+Sub CATDrw_Resizing( targetSheet as CATIABase )
+  '-------------------------------------------------------------------------------
+  'How to resize the FTB
+  '-------------------------------------------------------------------------------
+  If Not CATInit(targetSheet) Then Exit Sub
+  If CATCheckRef(0) Then Exit Sub  
+  Dim TbTranslation(4)
+  ComputeTitleBlockTranslation TbTranslation
+  If TbTranslation(0) <> 0 Or TbTranslation(1) <> 0 Then
+    ' Redraw Sheet Frame
+    DeleteAll "CATDrwSearch.2DGeometry.Name=Frame_*"    
+    CATFrame    
+    ' Redraw Title Block Frame
+    CATDeleteTitleBlockFrame
+    CATCreateTitleBlockFrame    
+    CATMoveTitleBlockText TbTranslation
+    
+    ' Move the views
+    CATColorGeometry 
+'    CATMoveViews TbTranslation
+'    CATLinks
+        
+  End If
+  CATExit targetSheet
+End Sub
+
+
+Sub CATDrw_Update( targetSheet as CATIABase )
+  '-------------------------------------------------------------------------------
+  'How to update the FTB
+  '-------------------------------------------------------------------------------
+  If Not CATInit(targetSheet) Then Exit Sub  
+  If CATCheckRef(0) Then Exit Sub
+  CATColorGeometry
+
+  ' обновим кол-во листов
+  '------------------------
+  Dim i, nbSheet, curSheet  As Integer
+  nbSheet  = 0
+  curSheet = 0
+  For i = 1 To Sheets.Count
+    If (not Sheets.Item(i).IsDetail) Then
+      nbSheet = nbSheet + 1
+      if Sheets.Item(i).Name = Sheet.Name then
+        curSheet = nbSheet
+      end if
+    End If
+  Next
+  If ( curSheet = 1 ) then
+    On Error Resume Next
+      Set Text = Texts.GetItem("TitleBlock_Text_1_sheets")
+      If Err.Number <> 0 Then
+        Err.Clear
+      Else
+        Text.Text = "Листов "+CStr(nbSheet)
+      End if
+    On Error Goto 0
+  End if
+  
+  CATExit targetSheet
+End Sub
+
+
+'-------------------------------------------------------------------------------
+'-------------------------------------------------------------------------------
+Sub CATExit( targetSheet as CATIABase )
+  '-------------------------------------------------------------------------------
+  'How to restore the document working mode
+  '-------------------------------------------------------------------------------
+  Selection.Clear
+  CATIA.HSOSynchronized=True
+
+  View.SaveEdition
+End Sub 
+
+
+Function GetMacroID() as String
+  GetMacroID = "gost2"
+End Function
+
+
+Function CATInit( targetSheet as CATIABase )
+  '-------------------------------------------------------------------------------
+  'How to init the dialog and create main objects
+  '-------------------------------------------------------------------------------
+  Set Selection    = CATIA.ActiveDocument.Selection
+  Set Sheet        = targetSheet
+  Set Sheets       = Sheet.Parent
+  Set ActiveDoc    = Sheets.Parent
+  Set Views        = Sheet.Views
+  Set View         = Views.Item(2)  'Get the background view
+  Set Texts        = View.Texts
+  Set Fact         = View.Factory2D
+  Set GeomElems    = View.GeometricElements
+  
+  If GetContext()="Unexpected" Then
+    Msg = "The macro runs in an inappropriate environment."&chr(13)&"The script will terminate wihtout finishing the current action."
+    Title ="Unexpected environement error"
+    MsgBox Msg,16, Title      
+    CATInit=FALSE 'Exit with error
+    Exit Function
+  End If
+  
+  Selection.Clear
+  CATIA.HSOSynchronized=False
+
+  CATInit=TRUE 'Exit without error
+End Function 
+
+
+Function GetContext()
+  ' Find execution context  
+  Select Case TypeName( Sheet )
+    Case "DrawingSheet"
+      Select Case TypeName( ActiveDoc )
+        Case "DrawingDocument": GetContext="DRW"
+        Case "ProductDocument": GetContext="SCH"
+        Case Else: GetContext="Unexpected"
+      End Select         
+      
+    Case "Layout2DSheet" : GetContext="LAY"
+    Case Else : GetContext="Unexpected"
+  End Select
+End Function 
+
+
+Sub CATCreateReference()
+  '-------------------------------------------------------------------------------
+  'How to create a reference text
+  '-------------------------------------------------------------------------------
+  Set Text = Texts.Add("", GetWidth(), GetHeight())
+  Text.Name = "Reference_" + GetMacroID
+  Dim x(5), y(5)
+  GetConcordBlockFrame x, y
+  Set Text = Texts.Add("", x(0), y(0))
+  Text.Name = "Reference_ConcordBlock_" + GetMacroID
+End Sub
+
+
+Function CATCheckRef(Mode As Integer) As Integer
+  '-------------------------------------------------------------------------------
+  'How to check that the called macro is the right one
+  'возвращает: 1 если есть Reference и (Mode=1 или Reference вписан другим макросом)
+  '            0 если есть Reference и (Mode<>1 и Reference вписан текущим макросом)
+  '            0 если нет Reference и Mode=1
+  '            1 если нет Reference и Mode<>1
+  '-------------------------------------------------------------------------------
+  nbTexts = Texts.Count
+  i = 0
+  notFound = 0
+  While (notFound = 0 And i<nbTexts)
+    i = i + 1    
+    Set Text = Texts.Item(i)
+    WholeName = Text.Name
+    leftText = Left(WholeName, 10)
+    If (leftText = "Reference_") Then
+      notFound = 1
+      refText = "Reference_" + GetMacroID()
+      If (Mode = 1) Then 
+        MsgBox "Frame and Titleblock already created!"
+        CATCheckRef = 1
+        Exit Function
+      ElseIf (Text.Name <> refText) Then
+        MsgBox "Frame and Titleblock created using another style:" + Chr(10) + "        " + GetMacroID()
+        CATCheckRef = 1
+        Exit Function
+      Else
+        CATCheckRef = 0
+        Exit Function        
+      End If
+    End If
+  Wend
+
+  If Mode = 1 Then
+    CATCheckRef = 0
+  Else
+    MsgBox "No Frame and Titleblock!"
+    CATCheckRef = 1    
+  End If
+End Function
+
+
+Sub CATFrame()
+  '-------------------------------------------------------------------------------
+  'How to create the Frame
+  '-------------------------------------------------------------------------------
+  On Error Resume Next
+    CreateLine GetOffset() + 15, GetOffset(), GetOH()         , GetOffset(), "Frame_In_Bottom"
+    CreateLine GetOH()         , GetOffset(), GetOH()         , GetOV()    , "Frame_In_Right"
+    CreateLine GetOH()         , GetOV()    , GetOffset() + 15, GetOV()    , "Frame_In_Top"
+    CreateLine GetOffset() + 15, GetOV()    , GetOffset() + 15, GetOffset(), "Frame_In_Left"
+	
+    CreateLine 0         , 0          , GetWidth(), 0          , "Frame_Out_Bottom"
+    CreateLine GetWidth(), 0          , GetWidth(), GetHeight(), "Frame_Out_Right"
+    CreateLine GetWidth(), GetHeight(), 0         , GetHeight(), "Frame_Out_Top"
+    CreateLine 0         , GetHeight(), 0         , 0          , "Frame_Out_Left"
+	
+    If Err.Number <> 0 Then Err.Clear
+  On Error Goto 0
+End Sub
+
+
+Sub CATCreateTitleBlockFrame()
+  '-------------------------------------------------------------------------------
+  'How to draw the title block geometry
+  '-------------------------------------------------------------------------------
+  Dim x(10), y(8)
+  Dim l
+  l = 0
+  
+  ' определим кол-во листов и номер текущего
+  '---------------------------------------------
+  Dim i, nbSheet, curSheet  As Integer
+  nbSheet  = 0
+  curSheet = 0
+  For i = 1 To Sheets.Count
+    If (not Sheets.Item(i).IsDetail) Then
+      nbSheet = nbSheet + 1
+      if Sheets.Item(i).Name = Sheet.Name then
+        curSheet = nbSheet
+      end if
+    End If
+  Next
+  
+  On Error Resume Next
+    GetTitleBlockFrame x, y
+    
+    If  ( curSheet = 1 ) Then
+    ' основная надпись первого листа
+    '---------------------------------
+      CreateLine x(0), y(5), x(9), y(5), "TitleBlock_Line_B_" & l : l = l + 1
+      CreateLine x(0), y(5), x(0), y(0), "TitleBlock_Line_B_" & l : l = l + 1
+	
+      For i = 1 to 10
+        CreateLine x(0), y(5)-RowT(5)*i, x(5), y(5)-RowT(5)*i, "TitleBlock_Line_S_" & l : l = l + 1
+      Next
+	
+      CreateLine x(5), y(1), x(9), y(1), "TitleBlock_Line_B_" & l : l = l + 1
+      CreateLine x(6), y(2), x(9), y(2), "TitleBlock_Line_B_" & l : l = l + 1
+      CreateLine x(6), y(3), x(9), y(3), "TitleBlock_Line_B_" & l : l = l + 1
+      CreateLine x(5), y(4), x(9), y(4), "TitleBlock_Line_B_" & l : l = l + 1
+
+      CreateLine x(1), y(5), x(1), y(5)-RowT(5)*5, "TitleBlock_Line_B_" & l : l = l + 1
+      For i = 2 to 5
+        CreateLine x(i), y(5), x(i), y(0), "TitleBlock_Line_B_" & l : l = l + 1
+      Next
+	
+      CreateLine x(6), y(4), x(6), y(0), "TitleBlock_Line_B_" & l : l = l + 1
+    CreateLine x(6)+5, y(4)-5, x(6)+5, y(2), "TitleBlock_Line_B_" & l : l = l + 1
+    CreateLine x(6)+10, y(4)-5, x(6)+10, y(2), "TitleBlock_Line_B_" & l : l = l + 1
+      CreateLine x(7), y(4), x(7), y(2), "TitleBlock_Line_B_" & l : l = l + 1
+      CreateLine x(8), y(4), x(8), y(2), "TitleBlock_Line_B_" & l : l = l + 1
+      CreateLine x(10), y(2), x(10), y(1), "TitleBlock_Line_B_" & l : l = l + 1
+
+      ' поле <Согласовано>
+      '---------------------
+      GetConcordBlockFrame x, y
+      For i = 1 to 3
+        CreateLine x(0),y(3)-RowCnT(2)*i,x(4),y(3)-RowCnT(2)*i, "TitleBlock_Line_S_" & l : l = l + 1
+      Next
+      CreateLine x(0),y(0),x(0),y(3), "TitleBlock_Line_B_" & l : l = l + 1
+      For i = 1 to 3
+        CreateLine x(i),y(1),x(i),y(3), "TitleBlock_Line_B_" & l : l = l + 1
+      Next
+      CreateLine x(4),y(0),x(4),y(3), "TitleBlock_Line_B_" & l : l = l + 1
+      For i = 1 to 3
+        CreateLine x(0),y(i),x(4),y(i), "TitleBlock_Line_B_" & l : l = l + 1
+      Next
+
+    Else
+    ' основная надпись НЕпервого листа
+    '---------------------------------
+      CreateLine x(0), y(1), x(9), y(1), "TitleBlock_Line_B_" & l : l = l + 1
+      For i = 0 to 5
+        CreateLine x(i), y(0), x(i), y(1), "TitleBlock_Line_B_" & l : l = l + 1
+      Next
+      CreateLine x(9)-10, y(0), x(9)-10, y(1), "TitleBlock_Line_B_" & l : l = l + 1
+      CreateLine x(9)-10, y(0)+8, x(9), y(0)+8, "TitleBlock_Line_B_" & l : l = l + 1
+      
+      CreateLine x(0), y(0)+5, x(5), y(0)+5, "TitleBlock_Line_S_" & l : l = l + 1
+      CreateLine x(0), y(0)+10, x(5), y(0)+10, "TitleBlock_Line_S_" & l : l = l + 1
+    End if
+
+    ' <Обозначение> в левом верхнем углу
+    '---------------------------------------
+    x(0)=GetOffset()+15 : y(0)=GetOV()
+    CreateLine x(0), y(0)-14, x(0)+70, y(0)-14, "TitleBlock_Line_B_" & l : l = l + 1
+    CreateLine x(0)+70, y(0)-14, x(0)+70, y(0), "TitleBlock_Line_B_" & l : l = l + 1
+    
+    ' боковые поля
+    '--------------
+    GetExtraBlockFrame x, y
+    For i = 0 to 5
+      CreateLine x(0),y(i),x(2),y(i), "TitleBlock_Line_B_" & l : l = l + 1
+    Next
+    CreateLine x(0),y(0),x(0),y(5), "TitleBlock_Line_B_" & l : l = l + 1
+    CreateLine x(1),y(0),x(1),y(5), "TitleBlock_Line_B_" & l : l = l + 1
+
+    For i = 6 to 8
+      CreateLine x(0),y(i),x(2),y(i), "TitleBlock_Line_B_" & l : l = l + 1
+    Next
+    CreateLine x(0),y(6),x(0),y(8), "TitleBlock_Line_B_" & l : l = l + 1
+    CreateLine x(1),y(6),x(1),y(8), "TitleBlock_Line_B_" & l : l = l + 1
+	
+    If Err.Number <> 0 Then
+      Err.Clear
+    End If
+  On Error Goto 0
+End Sub
+
+
+Sub CATDeleteTitleBlockFrame()
+  DeleteAll "CATDrwSearch.2DGeometry.Name=TitleBlock_Line_*"
+End Sub
+
+
+Sub CATTitleBlockText()
+  '-------------------------------------------------------------------------------
+  'How to fill in the title block
+  '-------------------------------------------------------------------------------
+  Dim x(10), y(8)
+  Dim l : l=0
+
+'  Text_15 = CATIA.SystemService.Environ("LOGNAME")
+'  If (Text_15 = "") Then
+'    Text_15 = CATIA.SystemService.Environ("USERNAME")
+'  End If
+
+  ' определим кол-во листов и номер текущего
+  '---------------------------------------------
+  Dim i, nbSheet, curSheet  As Integer
+  nbSheet  = 0
+  curSheet = 0
+  For i = 1 To Sheets.Count
+    If (not Sheets.Item(i).IsDetail) Then
+      nbSheet = nbSheet + 1
+      if Sheets.Item(i).Name = Sheet.Name then
+        curSheet = nbSheet
+      end if
+    End If
+  Next
+
+  ' основная надпись
+  '-----------------
+  GetTitleBlockFrame x, y
+
+  If  ( curSheet = 1 ) Then
+  ' основная надпись первого листа
+  '---------------------------------
+
+  CreateTextAF "Изм", x(0)+ColT(0)/2, y(3)-RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Лист", x(1)+ColT(1)/2, y(3)-RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "№ докум.", x(2)+ColT(2)/2, y(3)-RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Подп.", x(3)+ColT(3)/2, y(3)-RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Дата", x(4)+ColT(4)/2, y(3)-RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  
+  CreateTextAF "Разраб.", x(0)+1, y(0)+RowT(5)*5+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Проверил", x(0)+1, y(0)+RowT(5)*4+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Т. контр.", x(0)+1, y(0)+RowT(5)*3+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Нач. отд.", x(0)+1, y(0)+RowT(5)*2+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Н. контр.", x(0)+1, y(0)+RowT(5)*1+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Утв.", x(0)+1, y(0)+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255) : l=l+1
+
+  dim Text15
+  Text15 = CATIA.SystemService.Environ("LOGNAME")
+  If Text15 = "" Then Text15 = CATIA.SystemService.Environ("USERNAME")
+  CreateTextAF text15, x(2)+1, y(0)+RowT(5)*5+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255) : l=l+1
+  
+  For i = 4 To 0 Step -1
+    CreateTextAF "<Фамилия>", x(2)+1, y(0)+RowT(5)*i+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255)
+	l=l+1
+  Next
+  
+  For i = 5 To 0 Step -1
+    Set Text = CreateTextAF("00.00.00", x(4)+1, y(0)+RowT(5)*i+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255))
+	l=l+1
+	SetTextRS Text, 60, 10
+  Next
+  
+  CreateTextAF "<Обозначение><Тип>", x(5)+5, y(4)+RowT(4)/2, "TitleBlock_Text_1_"&l, catMiddleLeft, 7, RGBA(211,178,125,255) : l=l+1
+  CreateTextAF "<Наименование>", x(5)+ColT(5)/2, y(2)+RowT(2)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 3.5, RGBA(255,128,0,255) : l=l+1
+  CreateTextAF "<Материал>", x(5)+ColT(5)/2, y(0)+RowT(0)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 3.5, RGBA(255,128,0,255) : l=l+1
+  CreateTextAF "ЦКБ МТ "&Chr(34)&"Рубин"&Chr(34), x(6)+25, y(0)+RowT(0)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 3.5, RGBA(255,128,0,255) : l=l+1
+  Set Text = CreateTextAF("00,00", x(7)+ColT(7)/2, y(2)+RowT(2)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 5, RGBA(255,128,0,255))
+  SetTextRS Text, 60, 30 : l=l+1
+  CreateTextAF "1:1", x(8)+ColT(8)/2, y(2)+RowT(2)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 5, RGBA(255,128,0,255) : l=l+1
+
+  CreateTextAF "Лит.", x(6)+ColT(6)/2, y(3)+RowT(3)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Масса", x(7)+ColT(7)/2, y(3)+RowT(3)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Масштаб", x(8)+ColT(8)/2, y(3)+RowT(3)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+
+  CreateTextAF "Лист "+CStr(curSheet), x(6)+ColT(9)/2, y(1)+RowT(1)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Листов "+CStr(nbSheet), x(10)+15      , y(1)+RowT(1)/2, "TitleBlock_Text_1_sheets", catMiddleCenter, 2.5, RGBA(0,128,0,255)
+
+  ' Тех.требования
+  '----------------
+  CreateTextAF "Технические требования", GetOH()-50, GetOV()-25, "TitleBlock_Text_7_"&l, catTopRight, 2.5, RGBA(0,128,0,255) : l=l+1
+  
+  ' Согласовано
+  '------------
+  GetConcordBlockFrame x, y
+  CreateTextAF "Согласовано", x(0)+65/2, y(0)+RowCnT(0)/2, "TitleBlock_Text_4_"&l, catMiddleCenter, 3.5, RGBA(255,128,0,255) : l=l+1
+  CreateTextAF "Подразд.", x(0)+ColCnT(0)/2, y(1)+RowCnT(1)/2, "TitleBlock_Text_4_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Фамилия",  x(1)+ColCnT(1)/2, y(1)+RowCnT(1)/2, "TitleBlock_Text_4_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Подп.",    x(2)+ColCnT(2)/2, y(1)+RowCnT(1)/2, "TitleBlock_Text_4_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Дата",     x(3)+ColCnT(3)/2, y(1)+RowCnT(1)/2, "TitleBlock_Text_4_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+ 
+  Else
+  ' основная надпись НЕпервого листа
+  '------------------------------------
+  CreateTextAF "Изм", x(0)+ColT(0)/2, y(0)+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Лист", x(1)+ColT(1)/2, y(0)+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "№ докум.", x(2)+ColT(2)/2, y(0)+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Подп.", x(3)+ColT(3)/2, y(0)+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF "Дата", x(4)+ColT(4)/2, y(0)+RowT(5)/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+
+  CreateTextAF "Лист", x(9)-10+ColT(1)/2, y(1)-7/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF ""+CStr(curSheet), x(9)-10+ColT(1)/2, y(0)+8/2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  End If
+
+  CreateTextAF "Копировал", x(5)+ColT(5)/2, 2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  CreateTextAF GetDisplayFormat, x(6)+25, 2, "TitleBlock_Text_1_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255) : l=l+1
+  
+  ' <Обозначение> в левом верхнем углу
+  '-----------------------------------
+  Set Text = CreateTextAF("<Обозначение>", GetOffset()+15+70/2, GetOV()-14/2, "TitleBlock_Text_2_"&l, catMiddleCenter, 7, RGBA(211,178,125,255))
+  SetTextRS Text, 55, 30 : l=l+1
+  Text.TextProperties.Mirror  = catTextHorizontalAndVerticalFlip
+  Text.TextProperties.Update
+  
+  ' Инв.N и т.п. (слева-внизу)
+  '---------------------------
+  GetExtraBlockFrame x, y
+  Set Text = CreateTextAF("Инв. № подл.", x(0)+ColExT(0)/2, y(0)+RowExT(0)/2, "TitleBlock_Text_3_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255))
+  Text.Angle = 90 : l=l+1
+  Set Text = CreateTextAF("Подп. и дата", x(0)+ColExT(0)/2, y(1)+RowExT(1)/2, "TitleBlock_Text_3_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255))
+  Text.Angle = 90 : l=l+1
+  Set Text = CreateTextAF("Взам. инв. №", x(0)+ColExT(0)/2, y(2)+RowExT(2)/2, "TitleBlock_Text_3_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255))
+  Text.Angle = 90 : l=l+1
+  Set Text = CreateTextAF("Инв. № дубл.", x(0)+ColExT(0)/2, y(3)+RowExT(3)/2, "TitleBlock_Text_3_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255))
+  Text.Angle = 90 : l=l+1
+  Set Text = CreateTextAF("Подп. и дата", x(0)+ColExT(0)/2, y(4)+RowExT(4)/2, "TitleBlock_Text_3_"&l, catMiddleCenter, 2.5, RGBA(0,128,0,255))
+  Text.Angle = 90 : l=l+1
+
+  Set Text = CreateTextAF("Справ.N", x(0)+ColExT(0)/2, y(8)+4, "TitleBlock_Text_5_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255))
+  Text.Angle = 90 : l=l+1
+  Set Text = CreateTextAF("Перв.примен.", x(0)+ColExT(0)/2, y(7)+4, "TitleBlock_Text_5_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255))
+  Text.Angle = 90 : l=l+1
+  Set Text = CreateTextAF("<Основан.докумен.>", x(1)+ColExT(1)/2, y(8)+4, "TitleBlock_Text_5_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255))
+  Text.Angle = 90 : l=l+1
+  Set Text = CreateTextAF("<Номер специф.>", x(1)+ColExT(1)/2, y(7)+4, "TitleBlock_Text_5_"&l, catMiddleLeft, 2.5, RGBA(0,128,0,255))
+  Text.Angle = 90 : l=l+1
+  
+End Sub
+
+
+Sub CATMoveTitleBlockText(Translation As Variant)
+  '-------------------------------------------------------------------------------
+  'How to translate the whole title block after changing the page setup
+  '-------------------------------------------------------------------------------
+  SelectAll "CATDrwSearch.DrwText.Name=TitleBlock_Text_1_*"
+  count = Selection.Count2
+  For ii = 1 To count
+    Set Text=Selection.Item2(ii).Value
+    Text.x  = Text.x + Translation(0)
+'    Text.y  = Text.y + Translation(1)
+  Next
+
+  SelectAll "CATDrwSearch.DrwText.Name=TitleBlock_Text_4_*"
+  count = Selection.Count2
+  For ii = 1 To count
+    Set Text=Selection.Item2(ii).Value
+    Text.x  = Text.x + Translation(2)
+'    Text.y  = Text.y + Translation(3)
+  Next
+  
+  SelectAll "CATDrwSearch.DrwText.Name=TitleBlock_Text_2_*"
+  count = Selection.Count2
+  For ii = 1 To count
+    Set Text=Selection.Item2(ii).Value
+'    Text.x  = Text.x + Translation(0)
+    Text.y  = Text.y + Translation(1)
+  Next
+
+  SelectAll "CATDrwSearch.DrwText.Name=TitleBlock_Text_5_*"
+  count = Selection.Count2
+  For ii = 1 To count
+    Set Text=Selection.Item2(ii).Value
+'    Text.x  = Text.x + Translation(0)
+    Text.y  = Text.y + Translation(1)
+  Next
+
+  SelectAll "CATDrwSearch.DrwText.Name=TitleBlock_Text_7_*"
+  count = Selection.Count2
+  For ii = 1 To count
+    Set Text=Selection.Item2(ii).Value
+    Text.x  = Text.x + Translation(0)
+    Text.y  = Text.y + Translation(1)
+  Next
+End Sub
+
+
+Sub CATColorGeometry()
+  '-------------------------------------------------------------------------------
+  'How to color all geometric elements of the active view
+  '-------------------------------------------------------------------------------
+  
+  ' Uncomment the following sections if needed
+  Select Case GetContext():
+    Case "DRW": 
+        SelectAll "CATDrwSearch.2DGeometry.Name=TitleBlock_Line_B_*"
+        Selection.VisProperties.SetRealColor 255,255,255,0
+        SelectAll "CATDrwSearch.2DGeometry.Name=Frame_In_*"
+        Selection.VisProperties.SetRealColor 255,255,255,0
+        SelectAll "CATDrwSearch.2DGeometry.Name=TitleBlock_Line_S_*"
+        Selection.VisProperties.SetRealColor 150,150,150,0
+        SelectAll "CATDrwSearch.2DGeometry.Name=Frame_Out_*"
+        Selection.VisProperties.SetRealColor 150,150,150,0
+        Selection.Clear
+
+	Case "LAY":  
+        SelectAll "CATDrwSearch.2DGeometry" 
+        Selection.VisProperties.SetRealColor 255,255,255,0
+        Selection.Clear
+
+	Case "SCH": 
+        SelectAll "CATDrwSearch.2DGeometry.Name=TitleBlock_Line_B_*"
+        Selection.VisProperties.SetRealColor 255,255,255,0
+        SelectAll "CATDrwSearch.2DGeometry.Name=Frame_In_*"
+        Selection.VisProperties.SetRealColor 255,255,255,0
+        SelectAll "CATDrwSearch.2DGeometry.Name=TitleBlock_Line_S_*"
+        Selection.VisProperties.SetRealColor 150,150,150,0
+        SelectAll "CATDrwSearch.2DGeometry.Name=Frame_Out_*"
+        Selection.VisProperties.SetRealColor 150,150,150,0
+        Selection.Clear
+  End Select
+  
+End Sub
+
+'-------------------------------------------------------------------------------
+'-------------------------------------------------------------------------------
+
+Function GetWidth() as Double
+  Select Case TypeName(Sheet)
+    Case "DrawingSheet" : GetWidth=Sheet.GetPaperWidth
+    Case "Layout2DSheet": GetWidth=Sheet.PaperWidth  
+  End Select
+End Function
+  
+Function GetHeight() as Double
+  Select Case TypeName(Sheet)
+    Case "DrawingSheet" : GetHeight=Sheet.GetPaperHeight
+    Case "Layout2DSheet": GetHeight=Sheet.PaperHeight  
+  End Select
+End Function
+
+Function GetOffset() as Double  
+  GetOffset = 5.
+End Function
+
+Function GetOH() as Double
+  GetOH = GetWidth() - GetOffset()
+End Function
+
+Function GetOV() as Double
+  GetOV = GetHeight() - GetOffset()
+End Function
+
+
+Sub SelectAll( iQuery as String )  
+  Selection.Clear
+  Selection.Add(View)
+  'MsgBox iQuery
+  Selection.Search iQuery&",sel"    
+End Sub
+
+Sub DeleteAll( iQuery as String )
+  '-------------------------------------------------------------------------------
+  'Delete all elements  matching the query string iQuery
+  'Pay attention no to provide a localized query string.
+  '-------------------------------------------------------------------------------
+  Selection.Clear
+  Selection.Add(View)
+  'MsgBox iQuery
+  Selection.Search iQuery&",sel"  
+  ' Avoid Delete failure in case of an empty query result
+  If Selection.Count2<>0 Then Selection.Delete        
+End Sub
+
+
+Function CreateLine( iX1 As Double, iY1 As Double, iX2 As Double, iY2 As Double, iName As String) As Curve2D  
+  '-------------------------------------------------------------------------------
+  ' Creates a sketcher lines thanks to the current 2D factory set to the global variable Fact
+  ' The created line is reneamed to the given iName
+  '-------------------------------------------------------------------------------
+  Set CreateLine = Fact.CreateLine( iX1, iY1, iX2, iY2)
+  CreateLine.Name = iName
+End Function
+
+Function CreateText(iCaption as String, iX as Double, iY As Double, iName As String) As DrawingText
+  Set CreateText = Texts.Add(iCaption, iX, iY)
+  CreateText.Name= iName
+  CreateText.AnchorPosition = catMiddleCenter
+End Function
+
+Function CreateTextAF(iCaption as String, iX as Double, iY As Double, iName As String, iAnchorPosition As CatTextAnchorPosition, iFontSize As Double, iColor As Long) As DrawingText
+  Set CreateTextAF = Texts.Add(iCaption, iX, iY)
+  CreateTextAF.Name           = iName
+  CreateTextAF.SetFontName      0, 0, "simplex"
+  CreateTextAF.AnchorPosition = iAnchorPosition
+  CreateTextAF.SetFontSize      0, 0, iFontSize
+  CreateTextAF.SetParameterOnSubString catColor, 0, 0, iColor
+End Function
+
+Function SetTextRS(iText as DrawingText, iCharRatio as Byte, iCharSpacing As Byte) As DrawingText
+  Set SetTextRS = iText
+  SetTextRS.SetParameterOnSubString catCharRatio, 0, 0, iCharRatio
+  SetTextRS.SetParameterOnSubString catCharSpacing, 0, 0, iCharSpacing
+End Function
+
+Function ColT(idx As Integer) As Variant
+  ColT = Array( 7, 10, 23, 15, 10, 70, 15, 17, 18, 20)(idx)
+End Function
+
+Function RowT(idx As Integer) As Variant
+  RowT = Array(15, 5, 15, 5, 15, 5)(idx)
+End Function
+
+Function ColExT(idx As Integer) As Variant
+  ColExT = Array(5, 7)(idx)
+End Function
+
+Function RowExT(idx As Integer) As Variant
+  RowExT = Array(25,35,25,25,35,60,60)(idx)
+End Function
+
+Function ColCnT(idx As Integer) As Variant
+  ColCnT = Array(17,23,15,10,75)(idx)
+End Function
+
+Function RowCnT(idx As Integer) As Variant
+  RowCnT = Array(10,8,5)(idx)
+End Function
+
+
+Sub GetTitleBlockFrame(x, y)
+  x(9) = GetOH()
+  x(8) = x(9) - ColT(8)
+  x(7) = x(8) - ColT(7)
+  x(6) = x(7) - ColT(6)
+  x(5) = x(6) - ColT(5)
+  x(4) = x(5) - ColT(4)
+  x(3) = x(4) - ColT(3)
+  x(2) = x(3) - ColT(2)
+  x(1) = x(2) - ColT(1)
+  x(0) = x(1) - ColT(0)
+  x(10)= x(6) + ColT(9)
+
+  y(0) = GetOffset()
+  y(1) = y(0) + RowT(0)
+  y(2) = y(1) + RowT(1)
+  y(3) = y(2) + RowT(2)
+  y(4) = y(3) + RowT(3)
+  y(5) = y(4) + RowT(4)
+End Sub
+
+Sub GetExtraBlockFrame(x, y)
+  x(2) = GetOffset()+15
+  x(1) = x(2) - ColExT(1)
+  x(0) = x(1) - ColExT(0)
+
+  y(0) = GetOffset()
+  y(1) = y(0) + RowExT(0)
+  y(2) = y(1) + RowExT(1)
+  y(3) = y(2) + RowExT(2)
+  y(4) = y(3) + RowExT(3)
+  y(5) = y(4) + RowExT(4)
+  
+  y(6) = GetOV()
+  y(7) = y(6) - RowExT(5)
+  y(8) = y(7) - RowExT(6)
+End Sub
+
+Sub GetConcordBlockFrame(x, y)
+  x(4) = GetOH() - 185 - ColCnT(4)
+  If (GetWidth() <= 297) Then
+    x(4) = x(4) + 65
+  End If
+  x(3) = x(4) - ColCnT(3)
+  x(2) = x(3) - ColCnT(2)
+  x(1) = x(2) - ColCnT(1)
+  x(0) = x(1) - ColCnT(0)
+
+
+  y(0) = GetOffset()
+  y(1) = y(0) + RowCnT(0)
+  y(2) = y(1) + RowCnT(1)
+  y(3) = y(2) + RowCnT(2)*4
+End Sub
+
+
+Function RGBA(rCol As Byte, gCol As Byte, bCol As Byte, aCol As Byte) As Long
+  If rCol > 127 Then
+    rCol = rCol - 256
+  End If
+  RGBA = rCol*256*256*256 + gCol*256*256 + bCol*256 + aCol
+End Function
+
+
+Function GetDisplayFormat() as String
+  GetDisplayFormat = "Формат " + Sheet.PaperName
+End Function
+
+
+Sub ComputeTitleBlockTranslation(TranslationTab As Variant)
+  TranslationTab(0) = 0.
+  TranslationTab(1) = 0.
+  TranslationTab(2) = 0.
+  TranslationTab(3) = 0.
+  
+  On Error Resume Next
+    Set Text = Texts.GetItem("Reference_" + GetMacroID()) 'Get the reference text
+    If Err.Number <> 0 Then
+      Err.Clear
+    Else
+      TranslationTab(0) = GetWidth() - Text.x
+      TranslationTab(1) = GetHeight() - Text.y
+      Text.x = Text.x + TranslationTab(0)
+      Text.y = Text.y + TranslationTab(1)
+    End If
+    
+    Set Text = Texts.GetItem("Reference_ConcordBlock_" + GetMacroID()) 'Get the reference text - блок Согласовано
+    Dim x(5), y(5)
+    If Err.Number <> 0 Then
+      Err.Clear
+    Else
+      GetConcordBlockFrame x, y
+      TranslationTab(2) = x(0) - Text.x
+      TranslationTab(3) = y(0) - Text.y
+      Text.x = Text.x + TranslationTab(2)
+      Text.y = Text.y + TranslationTab(3)
+    End If
+  On Error Goto 0
+End Sub
+
+
+'-------------------------------------------------------------------------------
+'-------------------------------------------------------------------------------
+
+Sub CATDrwww_GetColor( targetSheet as CATIABase )
+  CATInit(targetSheet)
+  
+  Selection.Clear
+  Dim InputObjectType(0) : InputObjectType(0)="DrawingText"
+  Status=Selection.SelectElement2(InputObjectType,"Select a text",true)
+  if (Status = "Cancel") then Exit Sub
+  Dim Text_1 As DrawingText
+  Set Text_1 = Selection.Item2(1).Value
+  Dim i As Long
+  i=Text_1.TextProperties.Color
+  MsgBox "color = " & i
+End Sub

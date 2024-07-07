@@ -1,0 +1,15 @@
+Для того, чтобы запустить CATIA в режиме Administration Mode:
+
+1. Найти ярлык, которым Вы запускаете катьку и скопировать его. Для удобства скопированный ярлык переименовать во что-то типа CATIA....._admin. Залезть в свойства скопирвоанного ярлыка и добавить в строку Target ключ " -admin" (ессно, без кавычек). Строка должна выглядеть приблизительно таким образом (для установки по умолчанию):
+
+"C:\Program Files\Dassault Systemes\B16\intel_a\code\bin\CNEXT.exe" -env CATIA_P3.V5R16.B16 -direnv "C:\Documents and Settings\All Users\Application Data\DassaultSystemes\CATEnv" -nowindow -admin
+
+2. Находите в папке C:\Documents and Settings\All Users\Application Data\DassaultSystemes\CATEnv файл CATIA_P3.V5R16.B16. Открываете его любым текстовым редактором и находите там переменную CATReferenceSettingPath - в ней прописывается путь к так называемым админским настройкам, в отличие от CATUserSettingPath, где прописывается путь до пользовательских настроек.
+
+Задаёте, например, CATReferenceSettingPath=C:\CATIA_admin_Settings.
+
+3. В переменной CATDefaultCollectionStandard прописывается путь до папки, где хранятся Ваши стандарты. Его можно скопировать в переменную CATCollectionStandard также. По умолчанию это C:\Program Files\Dassault Systemes\B16\intel_a\resources\standard, чертёжные стандарты хранятся в подпапке drafting. Находите эту папку и создаёте копию, например, ISO.xml, называете его так как бы Вы хотели видеть название своего чертёжного стандарта.
+
+4. Запускаете по ярлыку катьку. В заголовке должна появиться надпись Administration Mode. Идёте в Tools/Standards. Выбираете CAtegory - drafting. Справа тот файл xml, который вы создали. И занимаетесь правкой чертёжного стандарта. В хелпе это прописано здесь:
+
+Interactive Drafting - Administration Tasks
